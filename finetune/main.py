@@ -18,7 +18,7 @@ from data_process.data_process import LMDataset
 class BLOOM:
     def __init__(self,
                  model_name_or_path,
-                 data_dir="./data",
+                 data_dir="..\\data",
                  train_epochs=3,
                  max_seq_len=512,
                  ):
@@ -28,8 +28,8 @@ class BLOOM:
         self.max_seq_len = max_seq_len
         self.train_epochs = train_epochs
         train_dataset = LMDataset(os.path.join(data_dir, "train.txt"), tokenizer=self.tokenizer, max_seq_length=40)
-        self.train_data = DataLoader(train_dataset, batch_size=2, shuffle=True)
-        self.dev_data = DataLoader(train_dataset, batch_size=6, shuffle=False)
+        self.train_data = DataLoader(train_dataset, batch_size=4, shuffle=True)
+        self.val_data = DataLoader(train_dataset, batch_size=16, shuffle=False)
 
     def encoding(self, prompt):
         inputs = self.tokenizer(prompt, return_tensors="pt")
@@ -48,13 +48,13 @@ class BLOOM:
             self.model.train()
             for batch in self.train_data:
                 global_step += 1
-                input_ids, labels, masks = batch
+                input_ids, labels, _ = batch
                 input_ids = input_ids.to(device)
                 labels = labels.to(device)
-                masks = masks.to(device)
                 optimizer.zero_grad()
                 outputs = self.model(input_ids)
-                loss = criterion(outputs.view(-1, outputs.size(-1)), labels.view(-1))
+                logits = outputs.logits
+                loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
                 loss.backward()
                 optimizer.step()
                 batch_loss = loss.item()
@@ -62,21 +62,24 @@ class BLOOM:
                 print(f'step {global_step}/{total_steps}, Train Loss: {batch_loss:.4f}')
             train_loss /= len(self.train_data)
             val_loss = 0
+            self.auto_test()
+
             self.model.eval()
             with torch.no_grad():
                 for batch in self.val_data:
-                    input_ids, labels = batch
+                    input_ids, labels, _ = batch
                     input_ids = input_ids.to(device)
                     labels = labels.to(device)
                     outputs = self.model(input_ids)
-                    loss = criterion(outputs.view(-1, outputs.size(-1)), labels.view(-1))
+                    logits = outputs.logits
+                    loss = criterion(logits.view(-1, logits.size(-1)), labels.view(-1))
                     val_loss += loss.item()
             val_loss /= len(self.val_data)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 torch.save(self.model.state_dict(), 'bloom_model.pt')
             print(f'Epoch {epoch + 1}/{self.train_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
-        self.model.load_state_dict(torch.load('bloom_model.pt'))
+
         return
 
     def generate(self, prompt):
@@ -88,7 +91,7 @@ class BLOOM:
         for _ in range(max_step):
             outputs = self.model(**inputs)
             next_token_id = torch.argmax(outputs.logits, -1)[:, -1:]
-            if next_token_id[0, 0] == self.tokenizer.eos_token:
+            if next_token_id[0, 0] == self.tokenizer.eos_token_id:
                 break
             inputs["input_ids"] = torch.cat((inputs["input_ids"], next_token_id), dim=-1)
 
@@ -97,14 +100,28 @@ class BLOOM:
 
         return sequence
 
+    def interact_test(self):
+        self.model.load_state_dict(torch.load('bloom_model.pt'))
+        query = input("User: ")
+        while query != "exit":
+            sequence = self.generate(prompt=query)
+            print(f"Agent: {sequence}")
+            query = input("User: ")
+
+    def auto_test(self):
+        for query in ["问：你是谁？\n答：", "问：一加一等于几？\n答："]:
+            sequence = self.generate(prompt=query)
+            print(sequence)
+
+        return
+
 
 def main():
     # "bigscience/bloom-560m"
     model_name_or_path = "d:\\pretrained_models\\bloom-560m"
-    query = "Hello, my dog is cute."
-    bloom = BLOOM(model_name_or_path, max_seq_len=40)
-    sequence = bloom.generate(prompt=query)
-    print(sequence)
+    bloom = BLOOM(model_name_or_path, max_seq_len=40, train_epochs=10)
+    bloom.interact_test()
+    # bloom.finetune()
 
     return
 
